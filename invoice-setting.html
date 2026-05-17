@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Invoice Setting | Royal Creation Billing</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/feather-icons"></script>
+<link rel="stylesheet" href="css/style.css">
+<style>
+.preview-area { background:#f8fafc; border-radius:10px; padding:20px; margin-top:20px; display:flex; justify-content:center; overflow:hidden; }
+.preview-stage { width:794px; transform-origin:top center; }
+.preview-note { background:#eef2ff; border:1px solid #c7d2fe; color:#312e81; padding:14px 16px; border-radius:10px; font-size:14px; line-height:1.6; }
+@media (max-width:900px) {
+  .preview-stage { transform: scale(0.45); transform-origin: top center; height: 505px; }
+}
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <div id="sidebar-mount"></div>
+  <main class="main-content">
+    <div id="topbar-mount"></div>
+    <div class="page-content">
+      <div class="page-header with-bg">
+        <div>
+          <h2 class="page-title">Invoice Layout Setting</h2>
+          <div class="breadcrumb"><a href="dashboard.html">Home</a> / Invoice Layout Setting</div>
+        </div>
+        <a href="dashboard.html" class="btn btn-dark"><i data-feather="arrow-left"></i> Back</a>
+      </div>
+
+      <form id="settingForm" class="form-card">
+        <div class="preview-note">
+          Multi-style option removed. Ab invoice ke liye ek hi clean, centered aur PDF-safe standard layout use hoga — isi se A4 PDF aur line alignment zyada stable rahegi.
+        </div>
+
+        <div class="toggle-row" style="margin-top:20px;">
+          <div class="toggle-switch active" id="termsToggle"></div>
+          <span>Term & Condition add in Last Page</span>
+        </div>
+        <p style="font-size:13px; color:var(--gray);" id="lastEdited">Note : Last Edited by User</p>
+
+        <div style="display:flex; gap:10px; margin-top:18px; flex-wrap:wrap;">
+          <button type="button" class="btn btn-primary" id="previewBtn"><i data-feather="eye"></i> Preview</button>
+          <button type="submit" class="btn btn-dark"><i data-feather="save"></i> Update Setting</button>
+        </div>
+      </form>
+
+      <div class="form-card">
+        <h3 class="section-title">Standard Layout Preview</h3>
+        <div class="preview-area" id="previewArea"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script type="module">
+import { auth, db } from './js/firebase-config.js';
+import { doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { renderSidebar, renderTopbar, attachLogout } from './js/sidebar.js';
+import { authGuard, setupSidebar, showToast, showLoader, hideLoader } from './js/utils.js';
+import { renderInvoiceTemplate, getDemoInvoice } from './js/invoice-template.js';
+
+let currentUser, terms = true, company = {};
+
+(async () => {
+  currentUser = await authGuard(auth);
+  document.getElementById('sidebar-mount').innerHTML = renderSidebar('');
+  document.getElementById('topbar-mount').innerHTML = renderTopbar(currentUser.displayName || 'User');
+  feather.replace();
+  setupSidebar();
+  attachLogout();
+
+  try {
+    const cSnap = await getDoc(doc(db, 'company', currentUser.uid));
+    if (cSnap.exists()) company = cSnap.data();
+  } catch (e) {}
+
+  try {
+    const snap = await getDoc(doc(db, 'settings', currentUser.uid));
+    if (snap.exists()) {
+      const s = snap.data();
+      if (s.terms === false) {
+        terms = false;
+        document.getElementById('termsToggle').classList.remove('active');
+      }
+      if (s.lastEditedBy) document.getElementById('lastEdited').textContent = `Note : Last Edited by ${s.lastEditedBy}`;
+    }
+  } catch (e) {}
+
+  renderPreview();
+  document.getElementById('termsToggle').addEventListener('click', e => {
+    terms = !terms;
+    e.currentTarget.classList.toggle('active');
+  });
+  document.getElementById('previewBtn').addEventListener('click', () => window.open('preview.html', '_blank'));
+  document.getElementById('settingForm').addEventListener('submit', save);
+})();
+
+function renderPreview() {
+  document.getElementById('previewArea').innerHTML = `<div class="preview-stage">${renderInvoiceTemplate(1, getDemoInvoice(), company)}</div>`;
+}
+
+async function save(e) {
+  e.preventDefault();
+  showLoader();
+  try {
+    await setDoc(doc(db, 'settings', currentUser.uid), {
+      printStyle: '1',
+      terms,
+      lastEditedBy: currentUser.displayName || 'User',
+      updatedAt: new Date().toISOString()
+    }, { merge: true });
+    showToast('Standard invoice setting updated');
+  } catch (er) {
+    showToast(er.message, 'error');
+  } finally {
+    hideLoader();
+  }
+}
+</script>
+</body>
+</html>

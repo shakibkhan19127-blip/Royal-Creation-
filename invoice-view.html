@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Invoice View | Royal Creation Billing</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/feather-icons"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<link rel="stylesheet" href="css/style.css">
+<style>
+.toolbar { background:white; padding:14px 22px; border-radius:var(--radius); margin-bottom:18px; display:flex; gap:10px; flex-wrap:wrap; box-shadow:var(--shadow-sm); align-items:center; }
+.toolbar-note { margin-left:auto; font-size:13px; color:var(--gray); font-weight:600; }
+.invoice-wrapper { display:flex; justify-content:center; padding:20px 0; overflow:hidden; }
+.invoice-stage { width:794px; transform-origin:top center; will-change:transform; }
+@media (max-width: 900px) {
+  .toolbar { padding:12px 14px; }
+  .toolbar-note { width:100%; margin-left:0; }
+}
+</style>
+</head>
+<body>
+<div class="app-layout">
+  <div id="sidebar-mount"></div>
+  <main class="main-content">
+    <div id="topbar-mount"></div>
+    <div class="page-content">
+      <div class="toolbar no-print">
+        <a href="invoice-list.html" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
+        <button class="btn btn-primary" onclick="window.print()"><i data-feather="printer"></i> Print</button>
+        <button class="btn btn-dark" id="downloadPdf"><i data-feather="download"></i> Download PDF</button>
+        <span class="toolbar-note">Standard centered Royal Creation layout enabled</span>
+      </div>
+      <div class="invoice-wrapper" id="invoiceContainer"></div>
+    </div>
+  </main>
+</div>
+
+<script type="module">
+import { auth, db } from './js/firebase-config.js';
+import { doc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { renderSidebar, renderTopbar, attachLogout } from './js/sidebar.js';
+import { authGuard, setupSidebar, showToast, showLoader, hideLoader } from './js/utils.js';
+import { renderInvoiceTemplate } from './js/invoice-template.js';
+
+const PAPER_WIDTH = 794;
+const PAPER_HEIGHT = 1123;
+let invoice, company;
+
+(async () => {
+  const user = await authGuard(auth);
+  document.getElementById('sidebar-mount').innerHTML = renderSidebar('invoice');
+  document.getElementById('topbar-mount').innerHTML = renderTopbar(user.displayName || 'User');
+  feather.replace();
+  setupSidebar();
+  attachLogout();
+
+  const params = new URLSearchParams(location.search);
+  const id = params.get('id');
+  if (!id) { showToast('Invoice ID missing', 'error'); return; }
+
+  showLoader();
+  try {
+    const snap = await getDoc(doc(db, 'invoices', id));
+    if (!snap.exists()) { showToast('Invoice not found', 'error'); return; }
+    invoice = snap.data();
+    const cSnap = await getDoc(doc(db, 'company', user.uid));
+    company = cSnap.exists() ? cSnap.data() : {};
+    render();
+  } catch (e) {
+    showToast(e.message, 'error');
+  } finally {
+    hideLoader();
+  }
+
+  window.addEventListener('resize', fitInvoiceToViewport);
+  document.getElementById('downloadPdf').addEventListener('click', downloadPDF);
+})();
+
+function render() {
+  const container = document.getElementById('invoiceContainer');
+  container.innerHTML = `<div class="invoice-stage">${renderInvoiceTemplate(1, invoice, company)}</div>`;
+  fitInvoiceToViewport();
+}
+
+function fitInvoiceToViewport() {
+  const container = document.getElementById('invoiceContainer');
+  const stage = container.querySelector('.invoice-stage');
+  if (!container || !stage) return;
+  const availableWidth = Math.max(container.clientWidth - 16, 280);
+  const scale = Math.min(1, availableWidth / PAPER_WIDTH);
+  stage.style.transform = `scale(${scale})`;
+  stage.style.height = `${PAPER_HEIGHT * scale}px`;
+}
+
+async function cloneForExport(el) {
+  const mount = document.createElement('div');
+  mount.style.position = 'fixed';
+  mount.style.left = '-100000px';
+  mount.style.top = '0';
+  mount.style.width = `${PAPER_WIDTH}px`;
+  mount.style.height = `${PAPER_HEIGHT}px`;
+  mount.style.background = '#ffffff';
+  mount.style.zIndex = '-1';
+  document.body.appendChild(mount);
+
+  const clone = el.cloneNode(true);
+  clone.style.transform = 'none';
+  clone.style.margin = '0';
+  clone.style.boxShadow = 'none';
+  clone.style.width = `${PAPER_WIDTH}px`;
+  clone.style.height = `${PAPER_HEIGHT}px`;
+  mount.appendChild(clone);
+
+  const images = clone.querySelectorAll('img');
+  await Promise.all([...images].map(img => img.complete ? Promise.resolve() : new Promise(resolve => {
+    img.onload = resolve;
+    img.onerror = resolve;
+  })));
+
+  return { mount, clone };
+}
+
+async function downloadPDF() {
+  const el = document.getElementById('invoicePaper');
+  if (!el) return showToast('Nothing to export', 'error');
+
+  showLoader();
+  showToast('Generating A4 PDF...');
+
+  try {
+    const { mount, clone } = await cloneForExport(el);
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    const canvas = await html2canvas(clone, {
+      scale: 4,
+      useCORS: true,
+      allowTaint: true,
+      backgroundColor: '#ffffff',
+      logging: false,
+      width: PAPER_WIDTH,
+      height: PAPER_HEIGHT,
+      windowWidth: PAPER_WIDTH,
+      windowHeight: PAPER_HEIGHT,
+      scrollX: 0,
+      scrollY: 0
+    });
+
+    mount.remove();
+
+    const imgData = canvas.toDataURL('image/png', 1.0);
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: false });
+    pdf.addImage(imgData, 'PNG', 0, 0, 210, 297, undefined, 'NONE');
+    pdf.save(`invoice_${invoice.invoiceNo || Date.now()}.pdf`);
+    showToast('A4 PDF downloaded successfully');
+  } catch (e) {
+    console.error(e);
+    showToast('PDF failed: ' + e.message, 'error');
+  } finally {
+    hideLoader();
+  }
+}
+</script>
+</body>
+</html>
